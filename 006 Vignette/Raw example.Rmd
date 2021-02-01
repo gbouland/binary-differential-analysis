@@ -1,0 +1,121 @@
+---
+title: "Differential dropout analysis starting with a raw count matrix"
+author: Gerard Bouland
+date: January 28, 2021
+output: 
+  html_document:
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/gabouland/Documents/004 PhD/000Data/SingleCell/AD_set')
+```
+
+In this vignette we show how to run a differential dropout analysis starting with a raw count matrix.
+
+## The differential dropout function
+
+The function requires a count matrix (`data`), a samplesheet (`samplesheet`), the cell population (`cells`) that needs to be tested and the contrasting cell population (`contrast`). The samplesheet should contain the following columns; `celltype`, `status`, `patient` and `IDs`. `celltype` should contain annotated cell populations, `status` should contain the contrasting cell population, `patient` should contain an individual identifier and `IDs` should correspond to the column names from the count matrix. The count matrix does not have to be binarized, as binarization is included in the function. 
+
+```{r}
+DDs <- function(data, samplesheet, cells, contrast){
+  DDres <- lapply(cells,function(cell){
+    message(cell)
+    cell.samplesheet <- samplesheet[samplesheet$celltype == cell,]
+    message("binarizing...")
+    cell.Counts <- as.matrix(data[,cell.samplesheet$IDs])
+    cell.Counts <- cell.Counts >= 1
+    results <- matrix(nrow = nrow(cell.Counts),ncol = 8)
+    total <- nrow(cell.Counts)
+    message("Starting tests...")
+    for(i in 1:total){      
+      if(i %% 1000 == 0){message(sprintf("%s of %s",i,total))}      
+      tmp <- data.frame("Gene" = cell.Counts[i,], "status" = cell.samplesheet$status)
+      tmp$status <- factor(tmp$status,levels = contrast)
+      tab <- table(tmp[,1],tmp[,2])
+      N1 <- sum(tab[,1])
+      N2 <- sum(tab[,2])
+      pct1 <- tab[1,1] / N1 
+      pct2 <- tab[1,2] / N2
+      if(pct1 == 1 & pct2 == 1){## If a gene consists only of zeros, that gene is skipped
+        newline <- c(NA,NA,NA,NA,NA,NA,NA,NA) 
+      }
+      else{     
+        res <- glm("status ~ Gene",family = "binomial",data = tmp)
+        sum <- summary(res)
+        newline <- sum$coefficients[2,]
+        newline <- c(newline,c(round(pct1,3),round(pct2,2),N1,N2)) 
+      }      
+      results[i,] <- newline      
+    }
+    results <- data.frame(results)
+    rownames(results) <- make.unique(rownames(cell.Counts))
+    colnames(results) <- c("Estimate","Std.Error","Z","P","pct1","pct2","N1","N2")
+    results <- na.omit(results)
+    results$fdr <- p.adjust(results$P,method="fdr")
+    results <- results[order(results$fdr),]
+    return(results)
+  })
+  names(DDres) <- cells
+  return(DDres)
+}
+```
+
+For this example we use the Alzheimer's disease dataset which can be aquired from: http://adsn.ddnetbio.com/session/c9ede3dd358aa00e26e4ef26f1a87e2c/download/scRNA_rawCounts?w=
+And the meta data can be acquired from: http://adsn.ddnetbio.com/session/c9ede3dd358aa00e26e4ef26f1a87e2c/download/scRNA_metadata?w=
+
+```{r}
+counts <- rio::import("scRNA_rawCounts.tsv")
+samplesheet <- rio::import("scRNA_metadata.tsv")
+```
+
+# Prepare data
+
+First we define the rownames based on the geneName column. Then, from the meta data we extract specifically those columns we require for the DDs function. 
+
+```{r}
+rownames(counts) <- counts$geneName
+counts$geneName <- NULL
+samplesheet <- samplesheet[,c("sampleID","cellType","batchCond","patient")]
+colnames(samplesheet) <- c("IDs","celltype","status","patient")# rename column names for DDs function
+counts <- counts[,samplesheet$IDs] #Here we make sure, the sample IDs correspond to the count columns
+knitr::kable(head(samplesheet))
+```
+
+## Run the DDs function
+
+For this example we only run the first 1000 genes in Neurons and Astrocytes. And the contrast is controls versus individuals with Alzheimer's Disease. The function adjusts for multiple tests within cell types and does this with the false discovery rate. 
+
+```{r}
+AD_DD_results <- DDs(data = counts[1:1000,],samplesheet = samplesheet, cells = c("neuron","astro"), contrast =  c("ct","AD"))
+knitr::kable(head(AD_DD_results$neuron))
+```
+
+Note, that pct refers to the percentage of zeros for the respective genes in the respective group. And the Estimate (`logOR`) refers to the odds of observing a one in the AD group relative to the control group. So for `PDE4B` in `neuron` we see logOR of `-0.88`, meaning that AD group has less observations (more zeros) than the control group. This is further confirmed by a pct1 of `0.49` and a pct2 of `0.70`.
+
+```{r}
+knitr::kable(head(AD_DD_results$astro))
+```
+
+### sessionInfo
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

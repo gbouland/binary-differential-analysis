@@ -1,0 +1,115 @@
+---
+title: "Differential dropout analysis starting with a Seurat object"
+author: Gerard Bouland
+date: January 28, 2021
+output: 
+  html_document:
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = 'C:/Users/gabouland/Documents/004 PhD/000Data/SingleCell/Covid19')
+```
+
+In this vignette we show how to run a differential dropout analysis starting with a Seurat object.
+
+## Required Packages
+
+```{r packages, warning=FALSE}
+library(Seurat)
+library(Matrix)
+```
+
+## The differential dropout function
+
+The function requires a count matrix (`data`), a samplesheet (`samplesheet`), the cell population (`cells`) that needs to be tested and the contrasting cell population (`contrast`). The samplesheet should contain the following columns; `celltype`, `status`, `patient` and `IDs`. `celltype` should contain annotated cell populations, `status` should contain the contrasting cell population, `patient` should contain an individual identifier and `IDs` should correspond to the column names from the count matrix. The count matrix does not have to be binarized, as binarization is included in the function. 
+
+```{r}
+DDs <- function(data, samplesheet, cells, contrast){
+  DDres <- lapply(cells,function(cell){
+    message(cell)
+    cell.samplesheet <- samplesheet[samplesheet$celltype == cell,]
+    message("binarizing...")
+    cell.Counts <- as.matrix(data[,cell.samplesheet$IDs])
+    cell.Counts <- cell.Counts >= 1
+    results <- matrix(nrow = nrow(cell.Counts),ncol = 8)
+    total <- nrow(cell.Counts)
+    message("Starting tests...")
+    for(i in 1:total){      
+      if(i %% 1000 == 0){message(sprintf("%s of %s",i,total))}      
+      tmp <- data.frame("Gene" = cell.Counts[i,], "status" = cell.samplesheet$status)
+      tmp$status <- factor(tmp$status,levels = contrast)
+      tab <- table(tmp[,1],tmp[,2])
+      N1 <- sum(tab[,1])
+      N2 <- sum(tab[,2])
+      pct1 <- tab[1,1] / N1 
+      pct2 <- tab[1,2] / N2
+      if(pct1 == 1 & pct2 == 1){## If a gene consists only of zeros, that gene is skipped
+        newline <- c(NA,NA,NA,NA,NA,NA,NA,NA) 
+      }
+      else{     
+        res <- glm("status ~ Gene",family = "binomial",data = tmp)
+        sum <- summary(res)
+        newline <- sum$coefficients[2,]
+        newline <- c(newline,c(round(pct1,3),round(pct2,2),N1,N2)) 
+      }      
+      results[i,] <- newline      
+    }
+    results <- data.frame(results)
+    rownames(results) <- make.unique(rownames(cell.Counts))
+    colnames(results) <- c("Estimate","Std.Error","Z","P","pct1","pct2","N1","N2")
+    results <- na.omit(results)
+    results$fdr <- p.adjust(results$P,method="fdr")
+    results <- results[order(results$fdr),]
+    return(results)
+  })
+  names(DDres) <- cells
+  return(DDres)
+}
+```
+
+## Extract data from seurat object
+
+For this example we use the COVID19 dataset which is already a seurat object and can be aquired from: https://hosted-matrices-prod.s3-us-west-2.amazonaws.com/Single_cell_atlas_of_peripheral_immune_response_to_SARS_CoV_2_infection-25/blish_covid.seu.rds. First we extract the count matrix from the `assay` slot in the Seurat object. Next, we  extract meta data from from the `meta.data` slot.  
+
+```{r}
+# load data
+covid_seurat <- readRDS("blish_covid.seu.rds")
+# extract counts
+counts <- covid_seurat@assays$RNA@counts
+# extract meta data
+samplesheet <- covid_seurat@meta.data
+```
+
+## Prepare data
+
+From the meta data we extract specifically those columns we require for the DDs function. 
+
+```{r}
+samplesheet <- samplesheet[,c("cell.type.coarse","Status","Donor")]
+samplesheet$IDs <- rownames(samplesheet)
+colnames(samplesheet) <- c("celltype","status","patient","IDs")
+knitr::kable(head(samplesheet))
+```
+
+## Run the DDs function
+
+For this example we only run the first 1000 genes in NK and B cells. And the contrast is Healthy controls versus individuals with COVID19. The function adjusts for multiple tests within cell types and does this with the false discovery rate. 
+
+```{r}
+covid_DD_results <- DDs(data = counts[1:1000,],samplesheet = samplesheet, cells = c("NK","PB"), contrast =  c("Healthy","COVID"))
+knitr::kable(head(covid_DD_results$NK))
+```
+
+Note, that pct refers to the percentage of zeros for the respective genes in the respective group. And the Estimate (`logOR`) refers to the odds of observing a one in the COVID group relative to the Healthy group. So for `ABLIM1` in `NK` we see logOR of `-0.63`, meaning that COVID group has less observations (more zeros) than the healthy group. This is further confirmed by a pct1 of `0.74` and a pct2 of `0.84`.
+
+```{r}
+knitr::kable(head(covid_DD_results$PB))
+```
+
+### sessionInfo
+
+```{r}
+sessionInfo()
+```
