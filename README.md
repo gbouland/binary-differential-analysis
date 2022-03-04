@@ -5,8 +5,9 @@ Single-cell RNA sequencing data is characterized by a large number of zero count
 
 The scripts, functions and source data for the figures of the associated manuscript can be found here. Additionally, two vignettes have been made describing a DDA starting from a Seurat object en a raw count matrix
 
-A preprint of the manuscript can be found on bioRxiv: https://doi.org/10.1101/2021.02.01.429187 
+The paper has been published in NAR Genomics and Bioinformatics: https://doi.org/10.1093/nargab/lqab118
 
+The results can interactively be explored here: http://insyprojects.ewi.tudelft.nl:5000/BinaryDifferentialAnalysis/
 
 
 
